@@ -2,6 +2,11 @@ name: Build Rishe Android APK
 
 on:
   workflow_dispatch:
+  pull_request:
+    branches: [main]
+    paths:
+      - "android/**"
+      - ".github/workflows/android.yml"
   push:
     branches: [main]
     paths:
