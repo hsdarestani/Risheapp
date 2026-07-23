@@ -1,12 +1,14 @@
 name: Deploy Rishe App
 
 on:
+  pull_request:
+    branches: [main]
   push:
     branches: [main]
   workflow_dispatch:
 
 concurrency:
-  group: risheapp-production
+  group: risheapp-${{ github.event_name }}-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
@@ -18,9 +20,25 @@ jobs:
         with:
           node-version: 22
       - run: npm install
-      - run: npm run build
+      - name: Build application
+        id: build
+        continue-on-error: true
+        run: npm run build > build.log 2>&1
+      - name: Upload build log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: build-log
+          path: build.log
+          if-no-files-found: ignore
+      - name: Surface build failure
+        if: steps.build.outcome == 'failure'
+        run: |
+          cat build.log
+          exit 1
 
   deploy:
+    if: github.event_name == 'push'
     needs: build
     runs-on: ubuntu-latest
     steps:
