@@ -7,7 +7,9 @@
     "dev": "concurrently \"vite --host 0.0.0.0\" \"node --watch server/index.js\"",
     "build": "tsc -b && vite build",
     "start": "node server/index.js",
-    "preview": "vite preview --host 0.0.0.0"
+    "preview": "vite preview --host 0.0.0.0",
+    "predev": "node scripts/restore.mjs",
+    "prebuild": "node scripts/restore.mjs"
   },
   "dependencies": {
     "express": "^4.21.2",
