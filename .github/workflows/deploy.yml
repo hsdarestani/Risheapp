@@ -46,6 +46,7 @@ jobs:
         run: |
           sudo apt-get update -qq
           sudo apt-get install -y -qq sshpass
+
       - name: Deploy over SSH
         id: deploy
         env:
@@ -60,12 +61,20 @@ jobs:
             root@"$HOST" 'bash -s' > deploy.log 2>&1 <<'REMOTE'
           set -euxo pipefail
           export DEBIAN_FRONTEND=noninteractive
+
           if ! command -v git >/dev/null 2>&1; then
             apt-get update && apt-get install -y git ca-certificates curl
           fi
           if ! command -v docker >/dev/null 2>&1; then
             curl -fsSL https://get.docker.com | sh
           fi
+
+          if command -v ufw >/dev/null 2>&1 && ufw status | grep -q "Status: active"; then
+            ufw allow 80/tcp || true
+            ufw allow 443/tcp || true
+            ufw allow 443/udp || true
+          fi
+
           mkdir -p /opt/risheapp
           if [ ! -d /opt/risheapp/.git ]; then
             rm -rf /opt/risheapp
@@ -75,20 +84,31 @@ jobs:
             git fetch origin main
             git reset --hard origin/main
           fi
+
           cd /opt/risheapp
           docker compose up -d --build --remove-orphans
           docker image prune -f
-          if command -v ufw >/dev/null 2>&1; then
-            ufw allow 80/tcp || true
-          fi
-          sleep 8
-          curl -fsS http://127.0.0.1/api/health
+
+          healthy=0
+          for attempt in $(seq 1 24); do
+            if curl -fsS http://127.0.0.1/api/health; then
+              healthy=1
+              break
+            fi
+            sleep 5
+          done
+
           docker compose ps
+          if [ "$healthy" -ne 1 ]; then
+            docker compose logs --tail=200
+            exit 1
+          fi
           REMOTE
           code=$?
           echo "exit_code=$code" >> "$GITHUB_OUTPUT"
           cat deploy.log
           exit 0
+
       - name: Upload deployment log
         if: always()
         uses: actions/upload-artifact@v4
@@ -96,9 +116,11 @@ jobs:
           name: deploy-log
           path: deploy.log
           if-no-files-found: ignore
+
       - name: Surface deployment failure
         if: steps.deploy.outputs.exit_code != '0'
         run: exit 1
+
       - name: Verify public endpoint
         if: steps.deploy.outputs.exit_code == '0'
         env:
