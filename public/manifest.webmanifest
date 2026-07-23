@@ -1,14 +1,37 @@
 {
+  "id": "/",
   "name": "ریشه - مستقیم از مزرعه پدری",
   "short_name": "ریشه",
-  "description": "خرید، بازی، آموزش کیفیت و چی بپزم برای خانواده‌های ایرانی",
-  "start_url": "/",
+  "description": "خرید، بازی، آموزش شناخت کیفیت و چی بپزم برای خانواده‌های ایرانی",
+  "start_url": "/?source=pwa",
+  "scope": "/",
   "display": "standalone",
+  "display_override": ["standalone", "minimal-ui"],
+  "orientation": "portrait-primary",
   "background_color": "#f4eee7",
   "theme_color": "#8acb39",
   "lang": "fa",
   "dir": "rtl",
+  "categories": ["shopping", "food", "lifestyle", "education", "games"],
+  "prefer_related_applications": false,
   "icons": [
-    { "src": "/icon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any maskable" }
+    {
+      "src": "/icon-192.png",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "/icon-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "/icon-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "maskable"
+    }
   ]
 }
