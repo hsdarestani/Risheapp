@@ -1,0 +1,14 @@
+{
+  "name": "ریشه - مستقیم از مزرعه پدری",
+  "short_name": "ریشه",
+  "description": "خرید، بازی، آموزش کیفیت و چی بپزم برای خانواده‌های ایرانی",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#f4eee7",
+  "theme_color": "#8acb39",
+  "lang": "fa",
+  "dir": "rtl",
+  "icons": [
+    { "src": "/icon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any maskable" }
+  ]
+}
