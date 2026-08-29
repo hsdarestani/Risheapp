@@ -116,10 +116,15 @@ app.all('/api/event-rishe/*', async (req, res) => {
   const headers = {
     Accept: 'application/json',
     'Content-Type': 'application/json; charset=utf-8',
-    'User-Agent': 'Event-Rishe-Relay/1.0',
+    'User-Agent': 'Event-Rishe-Relay/1.1',
   }
-  const deviceToken = cleanText(req.get('x-rishe-event-token') || '', 200)
-  if (deviceToken) headers['X-Rishe-Event-Token'] = deviceToken
+  const bearer = cleanText(req.get('authorization') || '', 260)
+  const tokenFromBearer = bearer.toLowerCase().startsWith('bearer ') ? cleanText(bearer.slice(7), 200) : ''
+  const deviceToken = cleanText(req.get('x-rishe-event-token') || tokenFromBearer, 200)
+  if (deviceToken) {
+    headers['X-Rishe-Event-Token'] = deviceToken
+    headers.Authorization = `Bearer ${deviceToken}`
+  }
 
   try {
     const upstream = await fetch(`${wooBase}/wp-json/rishe/v1/event-sales${suffix}`, {
