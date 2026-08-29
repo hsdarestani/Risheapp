@@ -50,7 +50,7 @@ public class MainActivity extends Activity {
         settings.setAllowContentAccess(false);
         settings.setMediaPlaybackRequiresUserGesture(false);
         settings.setCacheMode(WebSettings.LOAD_DEFAULT);
-        settings.setUserAgentString(settings.getUserAgentString() + " RisheEventAndroid/2.2");
+        settings.setUserAgentString(settings.getUserAgentString() + " RisheEventAndroid/2.3");
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
             settings.setSafeBrowsingEnabled(true);
         }
@@ -71,7 +71,7 @@ public class MainActivity extends Activity {
 
         @JavascriptInterface
         public void logout() {
-            preferences.edit().remove(TOKEN_KEY).apply();
+            preferences.edit().remove(TOKEN_KEY).commit();
         }
 
         @JavascriptInterface
@@ -94,24 +94,25 @@ public class MainActivity extends Activity {
                         return;
                     }
 
-                    // Do not consider login successful until the exact same token is
-                    // accepted by the protected seller API. This avoids the UI briefly
-                    // hiding the login screen and immediately returning to it.
                     NetworkResponse validation = performRequest("GET", "/bootstrap", "", token);
                     if (validation.status < 200 || validation.status >= 300) {
-                        preferences.edit().remove(TOKEN_KEY).apply();
+                        preferences.edit().remove(TOKEN_KEY).commit();
                         String fallback = "ورود تأیید شد، اما نشست فروش توسط سرور پذیرفته نشد.";
                         callback(requestId, false, validation.status, normalizeError(validation.body, fallback));
                         return;
                     }
 
-                    preferences.edit().putString(TOKEN_KEY, token).commit();
+                    if (!preferences.edit().putString(TOKEN_KEY, token).commit()) {
+                        callback(requestId, false, 500, jsonMessage("ذخیره نشست ورود روی گوشی انجام نشد."));
+                        return;
+                    }
+
                     JSONObject success = new JSONObject();
                     success.put("login", data);
                     success.put("bootstrap", new JSONObject(validation.body));
                     callback(requestId, true, response.status, success.toString());
                 } catch (Exception error) {
-                    preferences.edit().remove(TOKEN_KEY).apply();
+                    preferences.edit().remove(TOKEN_KEY).commit();
                     callback(requestId, false, 0, jsonMessage(networkMessage(error)));
                 }
             }).start();
@@ -135,7 +136,7 @@ public class MainActivity extends Activity {
                     );
                     boolean ok = response.status >= 200 && response.status < 300;
                     if (!ok && (response.status == 401 || response.status == 403)) {
-                        preferences.edit().remove(TOKEN_KEY).apply();
+                        preferences.edit().remove(TOKEN_KEY).commit();
                     }
                     callback(
                             requestId,
@@ -158,7 +159,7 @@ public class MainActivity extends Activity {
         connection.setRequestMethod(method);
         connection.setRequestProperty("Accept", "application/json");
         connection.setRequestProperty("Content-Type", "application/json; charset=utf-8");
-        connection.setRequestProperty("User-Agent", "Event-Rishe-Android/2.2");
+        connection.setRequestProperty("User-Agent", "Event-Rishe-Android/2.3");
         connection.setUseCaches(false);
         if (token != null && !token.isEmpty()) {
             connection.setRequestProperty("X-Rishe-Event-Token", token);
@@ -235,7 +236,10 @@ public class MainActivity extends Activity {
     private void callback(String requestId, boolean ok, int status, String payload) {
         String safeId = JSONObject.quote(requestId == null ? "" : requestId);
         String safePayload = JSONObject.quote(payload == null ? "{}" : payload);
-        String script = "window.__nativeResult(" + safeId + "," + (ok ? "true" : "false") + "," + status + "," + safePayload + ");";
+        String forceUi = ok
+                ? "var __l=document.getElementById('login');if(__l){__l.hidden=true;__l.style.setProperty('display','none','important');}"
+                : "";
+        String script = forceUi + "window.__nativeResult(" + safeId + "," + (ok ? "true" : "false") + "," + status + "," + safePayload + ");";
         runOnUiThread(() -> {
             if (webView != null) {
                 webView.evaluateJavascript(script, null);
