@@ -2,33 +2,49 @@ package store.rishe.event;
 
 import android.annotation.SuppressLint;
 import android.app.Activity;
+import android.content.Context;
 import android.content.SharedPreferences;
 import android.graphics.Color;
+import android.net.ConnectivityManager;
+import android.net.Network;
+import android.net.NetworkCapabilities;
 import android.os.Build;
 import android.os.Bundle;
 import android.webkit.JavascriptInterface;
+import android.webkit.WebResourceRequest;
+import android.webkit.WebResourceResponse;
 import android.webkit.WebSettings;
 import android.webkit.WebView;
 import android.webkit.WebViewClient;
 
 import org.json.JSONObject;
 
+import java.io.BufferedInputStream;
+import java.io.BufferedOutputStream;
 import java.io.BufferedReader;
+import java.io.File;
+import java.io.FileInputStream;
+import java.io.FileOutputStream;
 import java.io.InputStream;
 import java.io.InputStreamReader;
 import java.io.OutputStream;
 import java.net.HttpURLConnection;
 import java.net.URL;
 import java.nio.charset.StandardCharsets;
+import java.security.MessageDigest;
+import java.util.Locale;
+import java.util.Map;
 
 public class MainActivity extends Activity {
     private static final String LOCAL_APP_URL = "file:///android_asset/event/index.html";
     private static final String API_ROOT = "https://rishe.smarbiz.sbs/api/event-rishe";
     private static final String PREFS = "event_rishe_session";
     private static final String TOKEN_KEY = "device_token";
+    private static final long MAX_IMAGE_BYTES = 12L * 1024L * 1024L;
 
     private WebView webView;
     private SharedPreferences preferences;
+    private File productImageDirectory;
 
     @SuppressLint({"SetJavaScriptEnabled", "AddJavascriptInterface"})
     @Override
@@ -38,6 +54,11 @@ public class MainActivity extends Activity {
         getWindow().setStatusBarColor(Color.parseColor("#173C2F"));
         getWindow().setNavigationBarColor(Color.parseColor("#F4F2E9"));
         preferences = getSharedPreferences(PREFS, MODE_PRIVATE);
+        productImageDirectory = new File(getFilesDir(), "event_product_images");
+        if (!productImageDirectory.exists()) {
+            //noinspection ResultOfMethodCallIgnored
+            productImageDirectory.mkdirs();
+        }
 
         webView = new WebView(this);
         setContentView(webView);
@@ -50,7 +71,7 @@ public class MainActivity extends Activity {
         settings.setAllowContentAccess(false);
         settings.setMediaPlaybackRequiresUserGesture(false);
         settings.setCacheMode(WebSettings.LOAD_DEFAULT);
-        settings.setUserAgentString(settings.getUserAgentString() + " RisheEventAndroid/2.3");
+        settings.setUserAgentString(settings.getUserAgentString() + " RisheEventAndroid/2.4");
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
             settings.setSafeBrowsingEnabled(true);
         }
@@ -59,8 +80,183 @@ public class MainActivity extends Activity {
         }
 
         webView.addJavascriptInterface(new NativeApi(), "AndroidApi");
-        webView.setWebViewClient(new WebViewClient());
+        webView.setWebViewClient(new OfflineImageWebViewClient());
         webView.loadUrl(LOCAL_APP_URL);
+    }
+
+    private final class OfflineImageWebViewClient extends WebViewClient {
+        @Override
+        public WebResourceResponse shouldInterceptRequest(WebView view, WebResourceRequest request) {
+            if (request != null && "GET".equalsIgnoreCase(request.getMethod())) {
+                String url = request.getUrl() == null ? "" : request.getUrl().toString();
+                if (isImageRequest(url, request.getRequestHeaders())) {
+                    WebResourceResponse cached = productImageResponse(url);
+                    if (cached != null) {
+                        return cached;
+                    }
+                }
+            }
+            return super.shouldInterceptRequest(view, request);
+        }
+
+        @Override
+        public void onPageFinished(WebView view, String url) {
+            super.onPageFinished(view, url);
+            // Product cards are rendered dynamically. Force every product image to
+            // request eagerly so one online catalog load warms the persistent native cache.
+            String script = "(function(){"
+                    + "if(window.__risheImageWarmup)return;window.__risheImageWarmup=true;"
+                    + "function warm(){document.querySelectorAll('.product-media img').forEach(function(i){"
+                    + "try{i.loading='eager';i.decoding='async';if(i.dataset.risheWarm!=='1'){i.dataset.risheWarm='1';var s=i.src;i.src='';i.src=s;}}catch(e){}"
+                    + "});}"
+                    + "warm();new MutationObserver(warm).observe(document.documentElement,{childList:true,subtree:true});"
+                    + "})();";
+            view.evaluateJavascript(script, null);
+        }
+    }
+
+    private boolean isImageRequest(String url, Map<String, String> headers) {
+        if (url == null || !(url.startsWith("https://") || url.startsWith("http://"))) {
+            return false;
+        }
+        String accept = headers == null ? "" : headers.get("Accept");
+        if (accept != null && accept.toLowerCase(Locale.US).contains("image/")) {
+            return true;
+        }
+        String lower = url.toLowerCase(Locale.US);
+        int query = lower.indexOf('?');
+        if (query >= 0) lower = lower.substring(0, query);
+        return lower.endsWith(".jpg") || lower.endsWith(".jpeg") || lower.endsWith(".png")
+                || lower.endsWith(".webp") || lower.endsWith(".gif") || lower.endsWith(".avif");
+    }
+
+    private WebResourceResponse productImageResponse(String url) {
+        try {
+            String key = sha256(url);
+            File data = new File(productImageDirectory, key + ".bin");
+            File meta = new File(productImageDirectory, key + ".mime");
+
+            if (data.isFile() && data.length() > 0) {
+                return imageResponse(data, readMime(meta, mimeFromUrl(url)));
+            }
+            if (!hasNetwork()) {
+                return null;
+            }
+
+            File temp = new File(productImageDirectory, key + "." + Thread.currentThread().getId() + ".tmp");
+            HttpURLConnection connection = null;
+            try {
+                connection = (HttpURLConnection) new URL(url).openConnection();
+                connection.setInstanceFollowRedirects(true);
+                connection.setConnectTimeout(8000);
+                connection.setReadTimeout(12000);
+                connection.setRequestMethod("GET");
+                connection.setRequestProperty("Accept", "image/avif,image/webp,image/apng,image/svg+xml,image/*,*/*;q=0.8");
+                connection.setRequestProperty("User-Agent", "Event-Rishe-Android/2.4");
+                connection.setUseCaches(false);
+
+                int status = connection.getResponseCode();
+                if (status < 200 || status >= 300) return null;
+
+                long declaredLength = connection.getContentLengthLong();
+                if (declaredLength > MAX_IMAGE_BYTES) return null;
+                String mime = connection.getContentType();
+                if (mime != null) {
+                    int semicolon = mime.indexOf(';');
+                    if (semicolon >= 0) mime = mime.substring(0, semicolon);
+                    mime = mime.trim().toLowerCase(Locale.US);
+                }
+                if (mime == null || !mime.startsWith("image/")) {
+                    mime = mimeFromUrl(url);
+                }
+
+                long total = 0;
+                byte[] buffer = new byte[16 * 1024];
+                try (InputStream input = new BufferedInputStream(connection.getInputStream());
+                     OutputStream output = new BufferedOutputStream(new FileOutputStream(temp))) {
+                    int read;
+                    while ((read = input.read(buffer)) != -1) {
+                        total += read;
+                        if (total > MAX_IMAGE_BYTES) {
+                            throw new IllegalStateException("Image too large");
+                        }
+                        output.write(buffer, 0, read);
+                    }
+                    output.flush();
+                }
+
+                if (total < 1) return null;
+                if (!data.exists() && !temp.renameTo(data)) return null;
+                if (temp.exists() && data.exists()) {
+                    //noinspection ResultOfMethodCallIgnored
+                    temp.delete();
+                }
+                writeMime(meta, mime);
+                return imageResponse(data, mime);
+            } catch (Exception ignored) {
+                //noinspection ResultOfMethodCallIgnored
+                temp.delete();
+                return data.isFile() && data.length() > 0
+                        ? imageResponse(data, readMime(meta, mimeFromUrl(url)))
+                        : null;
+            } finally {
+                if (connection != null) connection.disconnect();
+            }
+        } catch (Exception ignored) {
+            return null;
+        }
+    }
+
+    private WebResourceResponse imageResponse(File file, String mime) throws Exception {
+        return new WebResourceResponse(mime, null, new FileInputStream(file));
+    }
+
+    private boolean hasNetwork() {
+        try {
+            ConnectivityManager manager = (ConnectivityManager) getSystemService(Context.CONNECTIVITY_SERVICE);
+            if (manager == null) return false;
+            Network network = manager.getActiveNetwork();
+            if (network == null) return false;
+            NetworkCapabilities capabilities = manager.getNetworkCapabilities(network);
+            return capabilities != null && capabilities.hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET);
+        } catch (Exception ignored) {
+            return false;
+        }
+    }
+
+    private String sha256(String value) throws Exception {
+        byte[] digest = MessageDigest.getInstance("SHA-256").digest(value.getBytes(StandardCharsets.UTF_8));
+        StringBuilder result = new StringBuilder(digest.length * 2);
+        for (byte b : digest) result.append(String.format(Locale.US, "%02x", b & 0xff));
+        return result.toString();
+    }
+
+    private String mimeFromUrl(String url) {
+        String lower = url == null ? "" : url.toLowerCase(Locale.US);
+        if (lower.contains(".png")) return "image/png";
+        if (lower.contains(".webp")) return "image/webp";
+        if (lower.contains(".gif")) return "image/gif";
+        if (lower.contains(".avif")) return "image/avif";
+        return "image/jpeg";
+    }
+
+    private void writeMime(File file, String mime) {
+        try (OutputStream output = new FileOutputStream(file, false)) {
+            output.write((mime == null ? "image/jpeg" : mime).getBytes(StandardCharsets.UTF_8));
+        } catch (Exception ignored) {
+        }
+    }
+
+    private String readMime(File file, String fallback) {
+        if (!file.isFile()) return fallback;
+        try (InputStream input = new FileInputStream(file)) {
+            byte[] bytes = new byte[(int) Math.min(file.length(), 128)];
+            int count = input.read(bytes);
+            String value = count > 0 ? new String(bytes, 0, count, StandardCharsets.UTF_8).trim() : "";
+            return value.startsWith("image/") ? value : fallback;
+        } catch (Exception ignored) {
+            return fallback;
+        }
     }
 
     public final class NativeApi {
@@ -159,7 +355,7 @@ public class MainActivity extends Activity {
         connection.setRequestMethod(method);
         connection.setRequestProperty("Accept", "application/json");
         connection.setRequestProperty("Content-Type", "application/json; charset=utf-8");
-        connection.setRequestProperty("User-Agent", "Event-Rishe-Android/2.3");
+        connection.setRequestProperty("User-Agent", "Event-Rishe-Android/2.4");
         connection.setUseCaches(false);
         if (token != null && !token.isEmpty()) {
             connection.setRequestProperty("X-Rishe-Event-Token", token);
@@ -210,7 +406,7 @@ public class MainActivity extends Activity {
     }
 
     private String networkMessage(Exception error) {
-        String raw = error.getMessage() == null ? "" : error.getMessage().toLowerCase();
+        String raw = error.getMessage() == null ? "" : error.getMessage().toLowerCase(Locale.US);
         if (raw.contains("unable to resolve host") || raw.contains("name or service")) {
             return "سرور واسط پیدا نشد. اینترنت یا DNS گوشی را بررسی کنید.";
         }
