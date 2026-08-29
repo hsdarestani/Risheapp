@@ -26,6 +26,10 @@ jobs:
       ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
       ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
       ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+      EVENT_ANDROID_KEYSTORE_B64: ${{ secrets.EVENT_ANDROID_KEYSTORE_B64 }}
+      EVENT_ANDROID_KEYSTORE_PASSWORD: ${{ secrets.EVENT_ANDROID_KEYSTORE_PASSWORD }}
+      EVENT_ANDROID_KEY_ALIAS: ${{ secrets.EVENT_ANDROID_KEY_ALIAS }}
+      EVENT_ANDROID_KEY_PASSWORD: ${{ secrets.EVENT_ANDROID_KEY_PASSWORD }}
 
     steps:
       - uses: actions/checkout@v4
@@ -47,15 +51,28 @@ jobs:
       - name: Build test APKs
         run: gradle -p android --no-daemon assembleDebug
 
-      - name: Restore release signing key
+      - name: Restore main Rishe release signing key
         if: env.ANDROID_KEYSTORE_B64 != ''
         run: |
           echo "$ANDROID_KEYSTORE_B64" | base64 --decode > "$RUNNER_TEMP/rishe-release.keystore"
           echo "ANDROID_KEYSTORE_PATH=$RUNNER_TEMP/rishe-release.keystore" >> "$GITHUB_ENV"
 
-      - name: Build signed release APKs
+      - name: Build main Rishe signed release APK
         if: env.ANDROID_KEYSTORE_B64 != ''
-        run: gradle -p android --no-daemon assembleRelease
+        run: gradle -p android --no-daemon :app:assembleRelease
+
+      - name: Restore Event Rishe release signing key
+        if: env.EVENT_ANDROID_KEYSTORE_B64 != ''
+        run: |
+          echo "$EVENT_ANDROID_KEYSTORE_B64" | base64 --decode > "$RUNNER_TEMP/event-rishe-release.keystore"
+          echo "ANDROID_KEYSTORE_PATH=$RUNNER_TEMP/event-rishe-release.keystore" >> "$GITHUB_ENV"
+          echo "ANDROID_KEYSTORE_PASSWORD=$EVENT_ANDROID_KEYSTORE_PASSWORD" >> "$GITHUB_ENV"
+          echo "ANDROID_KEY_ALIAS=$EVENT_ANDROID_KEY_ALIAS" >> "$GITHUB_ENV"
+          echo "ANDROID_KEY_PASSWORD=$EVENT_ANDROID_KEY_PASSWORD" >> "$GITHUB_ENV"
+
+      - name: Build Event Rishe signed release APK
+        if: env.EVENT_ANDROID_KEYSTORE_B64 != ''
+        run: gradle -p android --no-daemon :eventapp:assembleRelease
 
       - name: Upload main Rishe test APK
         uses: actions/upload-artifact@v4
@@ -83,7 +100,7 @@ jobs:
           retention-days: 90
 
       - name: Upload Event Rishe release APK
-        if: env.ANDROID_KEYSTORE_B64 != ''
+        if: env.EVENT_ANDROID_KEYSTORE_B64 != ''
         uses: actions/upload-artifact@v4
         with:
           name: event-rishe-release
