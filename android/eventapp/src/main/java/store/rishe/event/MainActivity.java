@@ -7,7 +7,6 @@ import android.graphics.Color;
 import android.net.Uri;
 import android.os.Build;
 import android.os.Bundle;
-import android.view.View;
 import android.webkit.CookieManager;
 import android.webkit.WebResourceError;
 import android.webkit.WebResourceRequest;
@@ -28,9 +27,6 @@ public class MainActivity extends Activity {
 
         getWindow().setStatusBarColor(Color.parseColor("#173C2F"));
         getWindow().setNavigationBarColor(Color.parseColor("#F4F2E9"));
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
-            getWindow().getDecorView().setSystemUiVisibility(View.SYSTEM_UI_FLAG_LIGHT_STATUS_BAR);
-        }
 
         webView = new WebView(this);
         setContentView(webView);
