@@ -2,32 +2,42 @@ package store.rishe.event;
 
 import android.annotation.SuppressLint;
 import android.app.Activity;
-import android.content.Intent;
+import android.content.SharedPreferences;
 import android.graphics.Color;
-import android.net.Uri;
 import android.os.Build;
 import android.os.Bundle;
-import android.webkit.CookieManager;
-import android.webkit.WebResourceError;
-import android.webkit.WebResourceRequest;
+import android.webkit.JavascriptInterface;
 import android.webkit.WebSettings;
 import android.webkit.WebView;
 import android.webkit.WebViewClient;
 
+import org.json.JSONObject;
+
+import java.io.BufferedReader;
+import java.io.InputStream;
+import java.io.InputStreamReader;
+import java.io.OutputStream;
+import java.net.HttpURLConnection;
+import java.net.URL;
+import java.nio.charset.StandardCharsets;
+
 public class MainActivity extends Activity {
-    private static final String APP_URL = "https://rishe.store/rishe-event-app/";
-    private static final String FALLBACK_APP_URL = "https://rishe.store/?rishe_event_app=1";
+    private static final String LOCAL_APP_URL = "file:///android_asset/event/index.html";
+    private static final String API_ROOT = "https://rishe.store/wp-json/rishe/v1/event-sales";
+    private static final String PREFS = "event_rishe_session";
+    private static final String TOKEN_KEY = "device_token";
 
     private WebView webView;
-    private boolean triedFallback = false;
+    private SharedPreferences preferences;
 
-    @SuppressLint("SetJavaScriptEnabled")
+    @SuppressLint({"SetJavaScriptEnabled", "AddJavascriptInterface"})
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
 
         getWindow().setStatusBarColor(Color.parseColor("#173C2F"));
         getWindow().setNavigationBarColor(Color.parseColor("#F4F2E9"));
+        preferences = getSharedPreferences(PREFS, MODE_PRIVATE);
 
         webView = new WebView(this);
         setContentView(webView);
@@ -36,11 +46,11 @@ public class MainActivity extends Activity {
         settings.setJavaScriptEnabled(true);
         settings.setDomStorageEnabled(true);
         settings.setDatabaseEnabled(true);
-        settings.setAllowFileAccess(false);
-        settings.setAllowContentAccess(true);
+        settings.setAllowFileAccess(true);
+        settings.setAllowContentAccess(false);
         settings.setMediaPlaybackRequiresUserGesture(false);
         settings.setCacheMode(WebSettings.LOAD_DEFAULT);
-        settings.setUserAgentString(settings.getUserAgentString() + " RisheEventAndroid/1.2");
+        settings.setUserAgentString(settings.getUserAgentString() + " RisheEventAndroid/2.0");
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
             settings.setSafeBrowsingEnabled(true);
         }
@@ -48,185 +58,194 @@ public class MainActivity extends Activity {
             settings.setMixedContentMode(WebSettings.MIXED_CONTENT_NEVER_ALLOW);
         }
 
-        CookieManager cookieManager = CookieManager.getInstance();
-        cookieManager.setAcceptCookie(true);
-        cookieManager.setAcceptThirdPartyCookies(webView, false);
+        webView.addJavascriptInterface(new NativeApi(), "AndroidApi");
+        webView.setWebViewClient(new WebViewClient());
+        webView.loadUrl(LOCAL_APP_URL);
+    }
 
-        webView.setWebViewClient(new WebViewClient() {
-            @Override
-            public boolean shouldOverrideUrlLoading(WebView view, WebResourceRequest request) {
-                return handleNavigation(request.getUrl());
-            }
+    public final class NativeApi {
+        @JavascriptInterface
+        public boolean hasSession() {
+            return !preferences.getString(TOKEN_KEY, "").isEmpty();
+        }
 
-            @Override
-            public boolean shouldOverrideUrlLoading(WebView view, String url) {
-                return handleNavigation(Uri.parse(url));
-            }
+        @JavascriptInterface
+        public void logout() {
+            preferences.edit().remove(TOKEN_KEY).apply();
+        }
 
-            @Override
-            public void onPageFinished(WebView view, String url) {
-                super.onPageFinished(view, url);
-                CookieManager.getInstance().flush();
-
-                Uri uri = Uri.parse(url == null ? "" : url);
-                if (isEventAppUri(uri)) {
-                    verifyAndLockEventScreen(view);
-                    return;
-                }
-
-                if (isLoginUri(uri)) {
-                    return;
-                }
-
-                if (isTrustedHttpUri(uri)) {
-                    loadEventApp();
-                }
-            }
-
-            @Override
-            public void onReceivedError(WebView view, WebResourceRequest request, WebResourceError error) {
-                if (request.isForMainFrame()) {
-                    if (!triedFallback) {
-                        triedFallback = true;
-                        webView.loadUrl(FALLBACK_APP_URL);
-                    } else {
-                        showFirstRunOfflinePage();
+        @JavascriptInterface
+        public void login(String requestId, String username, String password) {
+            new Thread(() -> {
+                try {
+                    JSONObject body = new JSONObject();
+                    body.put("username", username == null ? "" : username);
+                    body.put("password", password == null ? "" : password);
+                    NetworkResponse response = performRequest("POST", "/device-login", body.toString(), "");
+                    if (response.status >= 200 && response.status < 300) {
+                        JSONObject data = new JSONObject(response.body);
+                        String token = data.optString("device_token", "");
+                        if (token.isEmpty()) {
+                            callback(requestId, false, 500, jsonMessage("توکن ورود از سرور دریافت نشد."));
+                            return;
+                        }
+                        preferences.edit().putString(TOKEN_KEY, token).apply();
+                        callback(requestId, true, response.status, response.body);
+                        return;
                     }
+                    callback(requestId, false, response.status, normalizeError(response.body, "ورود انجام نشد."));
+                } catch (Exception error) {
+                    callback(requestId, false, 0, jsonMessage(networkMessage(error)));
                 }
+            }).start();
+        }
+
+        @JavascriptInterface
+        public void request(String requestId, String method, String path, String body) {
+            new Thread(() -> {
+                String token = preferences.getString(TOKEN_KEY, "");
+                if (token.isEmpty()) {
+                    callback(requestId, false, 401, jsonMessage("ابتدا وارد حساب فروشنده شوید."));
+                    return;
+                }
+                try {
+                    String safePath = path != null && path.startsWith("/") ? path : "/";
+                    NetworkResponse response = performRequest(
+                            method == null ? "GET" : method.toUpperCase(),
+                            safePath,
+                            body == null ? "" : body,
+                            token
+                    );
+                    boolean ok = response.status >= 200 && response.status < 300;
+                    if (!ok && (response.status == 401 || response.status == 403)) {
+                        preferences.edit().remove(TOKEN_KEY).apply();
+                    }
+                    callback(
+                            requestId,
+                            ok,
+                            response.status,
+                            ok ? response.body : normalizeError(response.body, "ارتباط با سرور انجام نشد.")
+                    );
+                } catch (Exception error) {
+                    callback(requestId, false, 0, jsonMessage(networkMessage(error)));
+                }
+            }).start();
+        }
+    }
+
+    private NetworkResponse performRequest(String method, String path, String body, String token) throws Exception {
+        URL url = new URL(API_ROOT + path);
+        HttpURLConnection connection = (HttpURLConnection) url.openConnection();
+        connection.setConnectTimeout(15000);
+        connection.setReadTimeout(20000);
+        connection.setRequestMethod(method);
+        connection.setRequestProperty("Accept", "application/json");
+        connection.setRequestProperty("Content-Type", "application/json; charset=utf-8");
+        connection.setRequestProperty("User-Agent", "Event-Rishe-Android/2.0");
+        connection.setUseCaches(false);
+        if (token != null && !token.isEmpty()) {
+            connection.setRequestProperty("X-Rishe-Event-Token", token);
+        }
+
+        if (!"GET".equals(method) && !"HEAD".equals(method)) {
+            connection.setDoOutput(true);
+            byte[] bytes = (body == null ? "" : body).getBytes(StandardCharsets.UTF_8);
+            connection.setFixedLengthStreamingMode(bytes.length);
+            try (OutputStream output = connection.getOutputStream()) {
+                output.write(bytes);
+            }
+        }
+
+        int status = connection.getResponseCode();
+        InputStream input = status >= 200 && status < 400
+                ? connection.getInputStream()
+                : connection.getErrorStream();
+        String responseBody = readAll(input);
+        connection.disconnect();
+        if (responseBody.trim().isEmpty()) {
+            responseBody = "{}";
+        }
+        return new NetworkResponse(status, responseBody);
+    }
+
+    private String readAll(InputStream input) throws Exception {
+        if (input == null) return "{}";
+        StringBuilder result = new StringBuilder();
+        try (BufferedReader reader = new BufferedReader(new InputStreamReader(input, StandardCharsets.UTF_8))) {
+            String line;
+            while ((line = reader.readLine()) != null) {
+                result.append(line);
+            }
+        }
+        return result.toString();
+    }
+
+    private String normalizeError(String body, String fallback) {
+        try {
+            JSONObject source = new JSONObject(body == null ? "{}" : body);
+            String message = source.optString("message", fallback);
+            return jsonMessage(message.isEmpty() ? fallback : message);
+        } catch (Exception ignored) {
+            return jsonMessage(fallback);
+        }
+    }
+
+    private String networkMessage(Exception error) {
+        String raw = error.getMessage() == null ? "" : error.getMessage().toLowerCase();
+        if (raw.contains("unable to resolve host") || raw.contains("name or service")) {
+            return "آدرس سرور پیدا نشد. اینترنت یا DNS گوشی را بررسی کنید.";
+        }
+        if (raw.contains("timed out") || raw.contains("timeout")) {
+            return "سرور پاسخ نداد. فروش‌های ثبت‌شده روی گوشی محفوظ می‌مانند.";
+        }
+        if (raw.contains("certificate") || raw.contains("ssl") || raw.contains("handshake")) {
+            return "اتصال امن به سرور برقرار نشد. تنظیمات SSL سایت باید بررسی شود.";
+        }
+        return "ارتباط با سرور برقرار نشد. اینترنت را بررسی کنید.";
+    }
+
+    private String jsonMessage(String message) {
+        try {
+            JSONObject result = new JSONObject();
+            result.put("message", message);
+            return result.toString();
+        } catch (Exception ignored) {
+            return "{\"message\":\"خطای ارتباط\"}";
+        }
+    }
+
+    private void callback(String requestId, boolean ok, int status, String payload) {
+        String safeId = JSONObject.quote(requestId == null ? "" : requestId);
+        String safePayload = JSONObject.quote(payload == null ? "{}" : payload);
+        String script = "window.__nativeResult(" + safeId + "," + (ok ? "true" : "false") + "," + status + "," + safePayload + ");";
+        runOnUiThread(() -> {
+            if (webView != null) {
+                webView.evaluateJavascript(script, null);
             }
         });
-
-        // Never restore the old Rishe app. Every launch starts on the dedicated event POS.
-        loadEventApp();
-    }
-
-    private void verifyAndLockEventScreen(WebView view) {
-        view.evaluateJavascript(
-                "document.getElementById('rishe-event-app') ? 'ok' : 'wrong'",
-                result -> {
-                    if ("\"ok\"".equals(result)) {
-                        triedFallback = false;
-                        injectKioskCss(view);
-                        view.clearHistory();
-                    } else if (!triedFallback) {
-                        triedFallback = true;
-                        view.loadUrl(FALLBACK_APP_URL);
-                    } else {
-                        showWrongEndpointPage();
-                    }
-                }
-        );
-    }
-
-    private void injectKioskCss(WebView view) {
-        String script = "(function(){"
-                + "var old=document.getElementById('rishe-event-apk-lock');if(old)old.remove();"
-                + "var s=document.createElement('style');s.id='rishe-event-apk-lock';"
-                + "s.textContent='.event-app__nav{display:none!important}'"
-                + "+'[data-screen=\\\"queue\\\"]{display:none!important}'"
-                + "+'.event-app{padding-bottom:0!important}';"
-                + "document.head.appendChild(s);"
-                + "var sale=document.querySelector('[data-screen=\\\"sale\\\"]');"
-                + "if(sale){sale.classList.add('is-active');sale.style.display='block';}"
-                + "})();";
-        view.evaluateJavascript(script, null);
-    }
-
-    private void loadEventApp() {
-        if (webView == null) return;
-        webView.loadUrl(triedFallback ? FALLBACK_APP_URL : APP_URL);
-    }
-
-    private boolean handleNavigation(Uri uri) {
-        if (isEventAppUri(uri) || isLoginUri(uri)) {
-            return false;
-        }
-
-        if (isTrustedHttpUri(uri)) {
-            loadEventApp();
-            return true;
-        }
-
-        String scheme = uri.getScheme() == null ? "" : uri.getScheme().toLowerCase();
-        if (scheme.equals("about") || scheme.equals("data")) {
-            return false;
-        }
-
-        try {
-            startActivity(new Intent(Intent.ACTION_VIEW, uri));
-        } catch (Exception ignored) {
-            // Unsupported external links are ignored; the POS remains on its own screen.
-        }
-        return true;
-    }
-
-    private boolean isTrustedHttpUri(Uri uri) {
-        String scheme = uri.getScheme() == null ? "" : uri.getScheme().toLowerCase();
-        String host = uri.getHost() == null ? "" : uri.getHost().toLowerCase();
-        boolean trustedHost = host.equals("rishe.store") || host.equals("www.rishe.store");
-        return (scheme.equals("http") || scheme.equals("https")) && trustedHost;
-    }
-
-    private boolean isLoginUri(Uri uri) {
-        if (!isTrustedHttpUri(uri)) return false;
-        String path = uri.getPath() == null ? "/" : uri.getPath();
-        return path.equals("/wp-login.php");
-    }
-
-    private boolean isEventAppUri(Uri uri) {
-        if (!isTrustedHttpUri(uri)) return false;
-        String path = uri.getPath() == null ? "/" : uri.getPath();
-        if (path.startsWith("/rishe-event-app/")) return true;
-        return (path.equals("/") || path.isEmpty()) && "1".equals(uri.getQueryParameter("rishe_event_app"));
-    }
-
-    private void showWrongEndpointPage() {
-        String html = "<!doctype html><html lang='fa' dir='rtl'><head>"
-                + "<meta name='viewport' content='width=device-width,initial-scale=1'>"
-                + "<style>body{margin:0;min-height:100vh;display:grid;place-items:center;padding:24px;box-sizing:border-box;"
-                + "background:#f4f2e9;color:#173c2f;font-family:sans-serif;text-align:center}.c{max-width:430px;background:#fff;"
-                + "border:1px solid #d8d3c5;border-radius:24px;padding:30px}button{border:0;border-radius:14px;background:#173c2f;"
-                + "color:#fff;padding:13px 22px;font:inherit;font-weight:700}</style></head><body><div class='c'>"
-                + "<h1>ایونت ریشه</h1><p>صفحه فروش ایونت روی سایت پیدا نشد. افزونه ریشه را بررسی کنید.</p>"
-                + "<button onclick=\"location.href='" + APP_URL + "'\">تلاش دوباره</button></div></body></html>";
-        webView.loadDataWithBaseURL(APP_URL, html, "text/html", "UTF-8", null);
-    }
-
-    private void showFirstRunOfflinePage() {
-        String html = "<!doctype html><html lang='fa' dir='rtl'><head>"
-                + "<meta name='viewport' content='width=device-width,initial-scale=1'>"
-                + "<style>body{margin:0;min-height:100vh;display:grid;place-items:center;padding:24px;box-sizing:border-box;"
-                + "background:#f4f2e9;color:#173c2f;font-family:sans-serif;text-align:center}.c{max-width:430px;background:#fff;"
-                + "border:1px solid #d8d3c5;border-radius:24px;padding:30px;box-shadow:0 16px 40px rgba(23,60,47,.12)}"
-                + "button{border:0;border-radius:14px;background:#173c2f;color:#fff;padding:13px 22px;font:inherit;font-weight:700}</style>"
-                + "</head><body><div class='c'><h1>ایونت ریشه</h1>"
-                + "<p>برای راه‌اندازی اولیه، یک بار اینترنت را وصل کن و وارد حساب فروشنده شو. بعد از آن فروش آفلاین در خود دستگاه ذخیره می‌شود.</p>"
-                + "<button onclick=\"location.href='" + APP_URL + "'\">تلاش دوباره</button></div></body></html>";
-        webView.loadDataWithBaseURL(APP_URL, html, "text/html", "UTF-8", null);
-    }
-
-    @Override
-    protected void onSaveInstanceState(Bundle outState) {
-        super.onSaveInstanceState(outState);
     }
 
     @Override
     public void onBackPressed() {
-        String current = webView == null ? "" : webView.getUrl();
-        if (current != null && current.contains("/wp-login.php") && webView.canGoBack()) {
-            webView.goBack();
-            return;
-        }
         moveTaskToBack(true);
     }
 
     @Override
     protected void onDestroy() {
-        CookieManager.getInstance().flush();
         if (webView != null) {
             webView.stopLoading();
             webView.destroy();
         }
         super.onDestroy();
+    }
+
+    private static final class NetworkResponse {
+        final int status;
+        final String body;
+
+        NetworkResponse(int status, String body) {
+            this.status = status;
+            this.body = body;
+        }
     }
 }
