@@ -10,6 +10,8 @@ import android.net.Network;
 import android.net.NetworkCapabilities;
 import android.os.Build;
 import android.os.Bundle;
+import android.view.View;
+import android.view.WindowInsets;
 import android.webkit.JavascriptInterface;
 import android.webkit.WebResourceRequest;
 import android.webkit.WebResourceResponse;
@@ -51,8 +53,13 @@ public class MainActivity extends Activity {
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
 
-        getWindow().setStatusBarColor(Color.parseColor("#173C2F"));
-        getWindow().setNavigationBarColor(Color.parseColor("#F4F2E9"));
+        getWindow().setStatusBarColor(Color.parseColor("#0F3D2E"));
+        getWindow().setNavigationBarColor(Color.parseColor("#F5F1E7"));
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+            int flags = getWindow().getDecorView().getSystemUiVisibility();
+            flags &= ~View.SYSTEM_UI_FLAG_LIGHT_STATUS_BAR;
+            getWindow().getDecorView().setSystemUiVisibility(flags);
+        }
         preferences = getSharedPreferences(PREFS, MODE_PRIVATE);
         productImageDirectory = new File(getFilesDir(), "event_product_images");
         if (!productImageDirectory.exists()) {
@@ -66,6 +73,19 @@ public class MainActivity extends Activity {
 
         webView = new WebView(this);
         setContentView(webView);
+        webView.setOnApplyWindowInsetsListener((view, insets) -> {
+            int topInset;
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+                topInset = insets.getInsets(WindowInsets.Type.statusBars()).top;
+            } else {
+                topInset = insets.getSystemWindowInsetTop();
+            }
+            if (view.getPaddingTop() != topInset) {
+                view.setPadding(0, topInset, 0, 0);
+            }
+            return insets;
+        });
+        webView.requestApplyInsets();
 
         WebSettings settings = webView.getSettings();
         settings.setJavaScriptEnabled(true);
@@ -75,7 +95,7 @@ public class MainActivity extends Activity {
         settings.setAllowContentAccess(false);
         settings.setMediaPlaybackRequiresUserGesture(false);
         settings.setCacheMode(WebSettings.LOAD_DEFAULT);
-        settings.setUserAgentString(settings.getUserAgentString() + " RisheEventAndroid/2.6");
+        settings.setUserAgentString(settings.getUserAgentString() + " RisheEventAndroid/2.7");
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
             settings.setSafeBrowsingEnabled(true);
         }
@@ -105,22 +125,18 @@ public class MainActivity extends Activity {
         public void onPageFinished(WebView view, String url) {
             super.onPageFinished(view, url);
             String script = "(function(){"
-                    + "if(!document.getElementById('rishe-compact-products')){var st=document.createElement('style');st.id='rishe-compact-products';"
-                    + "st.textContent='"
-                    + ".products{display:grid!important;grid-template-columns:repeat(2,minmax(0,1fr))!important;gap:6px!important;margin-top:8px!important;}"
-                    + ".product{display:grid!important;grid-template-columns:46px minmax(0,1fr) 34px!important;grid-template-rows:auto auto!important;grid-template-areas:\"media title add\" \"media meta add\"!important;align-items:center!important;column-gap:7px!important;row-gap:1px!important;min-height:58px!important;padding:6px!important;border-radius:12px!important;overflow:hidden!important;}"
-                    + ".product-media{grid-area:media!important;width:46px!important;height:46px!important;aspect-ratio:auto!important;border-radius:9px!important;align-self:center!important;}"
-                    + ".product-media:before{font-size:18px!important;}"
-                    + ".product strong{grid-area:title!important;font-size:13px!important;line-height:1.45!important;min-height:0!important;-webkit-line-clamp:1!important;font-weight:900!important;margin:0!important;align-self:end!important;}"
-                    + ".product-meta{grid-area:meta!important;display:flex!important;align-items:center!important;justify-content:flex-start!important;gap:5px!important;margin:0!important;align-self:start!important;min-width:0!important;}"
-                    + ".price{font-size:14px!important;line-height:1.35!important;font-weight:900!important;color:var(--green)!important;white-space:nowrap!important;}"
-                    + ".stock{font-size:8px!important;padding:2px 4px!important;line-height:1.2!important;max-width:46px!important;overflow:hidden!important;text-overflow:ellipsis!important;}"
-                    + ".product button{grid-area:add!important;width:34px!important;height:42px!important;min-height:42px!important;padding:0!important;border-radius:10px!important;font-size:0!important;box-shadow:none!important;align-self:center!important;}"
-                    + ".product button:after{content:\"+\";font-size:22px!important;font-weight:900!important;line-height:1!important;}"
-                    + ".search{margin-top:7px!important;}"
-                    + "@media(min-width:620px){.products{grid-template-columns:repeat(3,minmax(0,1fr))!important;}}"
-                    + "@media(max-width:350px){.product{grid-template-columns:42px minmax(0,1fr) 30px!important;min-height:54px!important;padding:5px!important;column-gap:5px!important}.product-media{width:42px!important;height:42px!important}.product strong{font-size:11.5px!important}.price{font-size:12.5px!important}.stock{display:none!important}.product button{width:30px!important;height:38px!important;min-height:38px!important}}';"
-                    + "document.head.appendChild(st);}"
+                    + "if(!document.getElementById('rishe-premium-polish')){"
+                    + "var l=document.createElement('link');l.id='rishe-premium-polish';l.rel='stylesheet';l.href='file:///android_asset/event/polish.css?v=2.7';document.head.appendChild(l);"
+                    + "}"
+                    + "if(!window.__risheWholeProductTap){window.__risheWholeProductTap=true;"
+                    + "document.addEventListener('click',function(e){try{"
+                    + "var row=e.target.closest&&e.target.closest('.product');if(!row)return;"
+                    + "var root=document.getElementById('products');if(!root||!root.contains(row))return;"
+                    + "if(e.target.closest('[data-add]'))return;"
+                    + "var b=row.querySelector('[data-add]');if(!b)return;"
+                    + "e.preventDefault();e.stopPropagation();row.classList.add('just-added');setTimeout(function(){row.classList.remove('just-added')},180);b.click();"
+                    + "}catch(x){}},true);"
+                    + "}"
                     + "if(window.__risheImageWarmup)return;window.__risheImageWarmup=true;"
                     + "function warm(){document.querySelectorAll('.product-media img').forEach(function(i){"
                     + "try{i.loading='eager';i.decoding='async';if(i.dataset.risheWarm!=='1'){i.dataset.risheWarm='1';var s=i.src;i.src='';i.src=s;}}catch(e){}"
@@ -161,7 +177,7 @@ public class MainActivity extends Activity {
                 connection.setReadTimeout(12000);
                 connection.setRequestMethod("GET");
                 connection.setRequestProperty("Accept", "image/avif,image/webp,image/apng,image/svg+xml,image/*,*/*;q=0.8");
-                connection.setRequestProperty("User-Agent", "Event-Rishe-Android/2.6");
+                connection.setRequestProperty("User-Agent", "Event-Rishe-Android/2.7");
                 connection.setUseCaches(false);
                 int status = connection.getResponseCode();
                 if (status < 200 || status >= 300) return null;
@@ -387,7 +403,7 @@ public class MainActivity extends Activity {
         connection.setRequestMethod(method);
         connection.setRequestProperty("Accept", "application/json");
         connection.setRequestProperty("Content-Type", "application/json; charset=utf-8");
-        connection.setRequestProperty("User-Agent", "Event-Rishe-Android/2.6");
+        connection.setRequestProperty("User-Agent", "Event-Rishe-Android/2.7");
         connection.setUseCaches(false);
         if (token != null && !token.isEmpty()) {
             connection.setRequestProperty("X-Rishe-Event-Token", token);
