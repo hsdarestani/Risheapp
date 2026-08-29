@@ -23,7 +23,7 @@ import java.nio.charset.StandardCharsets;
 
 public class MainActivity extends Activity {
     private static final String LOCAL_APP_URL = "file:///android_asset/event/index.html";
-    private static final String API_ROOT = "https://rishe.store/wp-json/rishe/v1/event-sales";
+    private static final String API_ROOT = "https://rishe.smarbiz.sbs/api/event-rishe";
     private static final String PREFS = "event_rishe_session";
     private static final String TOKEN_KEY = "device_token";
 
@@ -50,7 +50,7 @@ public class MainActivity extends Activity {
         settings.setAllowContentAccess(false);
         settings.setMediaPlaybackRequiresUserGesture(false);
         settings.setCacheMode(WebSettings.LOAD_DEFAULT);
-        settings.setUserAgentString(settings.getUserAgentString() + " RisheEventAndroid/2.0");
+        settings.setUserAgentString(settings.getUserAgentString() + " RisheEventAndroid/2.1");
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
             settings.setSafeBrowsingEnabled(true);
         }
@@ -136,12 +136,12 @@ public class MainActivity extends Activity {
     private NetworkResponse performRequest(String method, String path, String body, String token) throws Exception {
         URL url = new URL(API_ROOT + path);
         HttpURLConnection connection = (HttpURLConnection) url.openConnection();
-        connection.setConnectTimeout(15000);
-        connection.setReadTimeout(20000);
+        connection.setConnectTimeout(12000);
+        connection.setReadTimeout(22000);
         connection.setRequestMethod(method);
         connection.setRequestProperty("Accept", "application/json");
         connection.setRequestProperty("Content-Type", "application/json; charset=utf-8");
-        connection.setRequestProperty("User-Agent", "Event-Rishe-Android/2.0");
+        connection.setRequestProperty("User-Agent", "Event-Rishe-Android/2.1");
         connection.setUseCaches(false);
         if (token != null && !token.isEmpty()) {
             connection.setRequestProperty("X-Rishe-Event-Token", token);
@@ -193,15 +193,15 @@ public class MainActivity extends Activity {
     private String networkMessage(Exception error) {
         String raw = error.getMessage() == null ? "" : error.getMessage().toLowerCase();
         if (raw.contains("unable to resolve host") || raw.contains("name or service")) {
-            return "آدرس سرور پیدا نشد. اینترنت یا DNS گوشی را بررسی کنید.";
+            return "سرور واسط پیدا نشد. اینترنت یا DNS گوشی را بررسی کنید.";
         }
         if (raw.contains("timed out") || raw.contains("timeout")) {
-            return "سرور پاسخ نداد. فروش‌های ثبت‌شده روی گوشی محفوظ می‌مانند.";
+            return "سرور واسط پاسخ نداد. دوباره تلاش کنید.";
         }
         if (raw.contains("certificate") || raw.contains("ssl") || raw.contains("handshake")) {
-            return "اتصال امن به سرور برقرار نشد. تنظیمات SSL سایت باید بررسی شود.";
+            return "اتصال امن به سرور واسط برقرار نشد.";
         }
-        return "ارتباط با سرور برقرار نشد. اینترنت را بررسی کنید.";
+        return "ارتباط با سرور واسط برقرار نشد. اینترنت را بررسی کنید.";
     }
 
     private String jsonMessage(String message) {
