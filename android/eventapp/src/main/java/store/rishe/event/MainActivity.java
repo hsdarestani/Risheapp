@@ -75,7 +75,7 @@ public class MainActivity extends Activity {
         settings.setAllowContentAccess(false);
         settings.setMediaPlaybackRequiresUserGesture(false);
         settings.setCacheMode(WebSettings.LOAD_DEFAULT);
-        settings.setUserAgentString(settings.getUserAgentString() + " RisheEventAndroid/2.5");
+        settings.setUserAgentString(settings.getUserAgentString() + " RisheEventAndroid/2.6");
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
             settings.setSafeBrowsingEnabled(true);
         }
@@ -105,6 +105,22 @@ public class MainActivity extends Activity {
         public void onPageFinished(WebView view, String url) {
             super.onPageFinished(view, url);
             String script = "(function(){"
+                    + "if(!document.getElementById('rishe-compact-products')){var st=document.createElement('style');st.id='rishe-compact-products';"
+                    + "st.textContent='"
+                    + ".products{display:grid!important;grid-template-columns:repeat(2,minmax(0,1fr))!important;gap:6px!important;margin-top:8px!important;}"
+                    + ".product{display:grid!important;grid-template-columns:46px minmax(0,1fr) 34px!important;grid-template-rows:auto auto!important;grid-template-areas:\"media title add\" \"media meta add\"!important;align-items:center!important;column-gap:7px!important;row-gap:1px!important;min-height:58px!important;padding:6px!important;border-radius:12px!important;overflow:hidden!important;}"
+                    + ".product-media{grid-area:media!important;width:46px!important;height:46px!important;aspect-ratio:auto!important;border-radius:9px!important;align-self:center!important;}"
+                    + ".product-media:before{font-size:18px!important;}"
+                    + ".product strong{grid-area:title!important;font-size:13px!important;line-height:1.45!important;min-height:0!important;-webkit-line-clamp:1!important;font-weight:900!important;margin:0!important;align-self:end!important;}"
+                    + ".product-meta{grid-area:meta!important;display:flex!important;align-items:center!important;justify-content:flex-start!important;gap:5px!important;margin:0!important;align-self:start!important;min-width:0!important;}"
+                    + ".price{font-size:14px!important;line-height:1.35!important;font-weight:900!important;color:var(--green)!important;white-space:nowrap!important;}"
+                    + ".stock{font-size:8px!important;padding:2px 4px!important;line-height:1.2!important;max-width:46px!important;overflow:hidden!important;text-overflow:ellipsis!important;}"
+                    + ".product button{grid-area:add!important;width:34px!important;height:42px!important;min-height:42px!important;padding:0!important;border-radius:10px!important;font-size:0!important;box-shadow:none!important;align-self:center!important;}"
+                    + ".product button:after{content:\"+\";font-size:22px!important;font-weight:900!important;line-height:1!important;}"
+                    + ".search{margin-top:7px!important;}"
+                    + "@media(min-width:620px){.products{grid-template-columns:repeat(3,minmax(0,1fr))!important;}}"
+                    + "@media(max-width:350px){.product{grid-template-columns:42px minmax(0,1fr) 30px!important;min-height:54px!important;padding:5px!important;column-gap:5px!important}.product-media{width:42px!important;height:42px!important}.product strong{font-size:11.5px!important}.price{font-size:12.5px!important}.stock{display:none!important}.product button{width:30px!important;height:38px!important;min-height:38px!important}}';"
+                    + "document.head.appendChild(st);}"
                     + "if(window.__risheImageWarmup)return;window.__risheImageWarmup=true;"
                     + "function warm(){document.querySelectorAll('.product-media img').forEach(function(i){"
                     + "try{i.loading='eager';i.decoding='async';if(i.dataset.risheWarm!=='1'){i.dataset.risheWarm='1';var s=i.src;i.src='';i.src=s;}}catch(e){}"
@@ -145,7 +161,7 @@ public class MainActivity extends Activity {
                 connection.setReadTimeout(12000);
                 connection.setRequestMethod("GET");
                 connection.setRequestProperty("Accept", "image/avif,image/webp,image/apng,image/svg+xml,image/*,*/*;q=0.8");
-                connection.setRequestProperty("User-Agent", "Event-Rishe-Android/2.5");
+                connection.setRequestProperty("User-Agent", "Event-Rishe-Android/2.6");
                 connection.setUseCaches(false);
                 int status = connection.getResponseCode();
                 if (status < 200 || status >= 300) return null;
@@ -371,7 +387,7 @@ public class MainActivity extends Activity {
         connection.setRequestMethod(method);
         connection.setRequestProperty("Accept", "application/json");
         connection.setRequestProperty("Content-Type", "application/json; charset=utf-8");
-        connection.setRequestProperty("User-Agent", "Event-Rishe-Android/2.5");
+        connection.setRequestProperty("User-Agent", "Event-Rishe-Android/2.6");
         connection.setUseCaches(false);
         if (token != null && !token.isEmpty()) {
             connection.setRequestProperty("X-Rishe-Event-Token", token);
