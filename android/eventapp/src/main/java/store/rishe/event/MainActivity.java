@@ -38,8 +38,8 @@ import java.util.Map;
 public class MainActivity extends Activity {
     private static final String LOCAL_APP_URL = "file:///android_asset/event/index.html";
     private static final String API_ROOT = "https://rishe.smarbiz.sbs/api/event-rishe";
-    private static final String PREFS = "event_rishe_session";
-    private static final String TOKEN_KEY = "device_token";
+    private static final String PREFS = EventSyncWorker.PREFS;
+    private static final String TOKEN_KEY = EventSyncWorker.TOKEN_KEY;
     private static final long MAX_IMAGE_BYTES = 12L * 1024L * 1024L;
 
     private WebView webView;
@@ -60,6 +60,10 @@ public class MainActivity extends Activity {
             productImageDirectory.mkdirs();
         }
 
+        if (EventSyncWorker.hasPending(this)) {
+            EventSyncWorker.schedule(this);
+        }
+
         webView = new WebView(this);
         setContentView(webView);
 
@@ -71,7 +75,7 @@ public class MainActivity extends Activity {
         settings.setAllowContentAccess(false);
         settings.setMediaPlaybackRequiresUserGesture(false);
         settings.setCacheMode(WebSettings.LOAD_DEFAULT);
-        settings.setUserAgentString(settings.getUserAgentString() + " RisheEventAndroid/2.4");
+        settings.setUserAgentString(settings.getUserAgentString() + " RisheEventAndroid/2.5");
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
             settings.setSafeBrowsingEnabled(true);
         }
@@ -91,9 +95,7 @@ public class MainActivity extends Activity {
                 String url = request.getUrl() == null ? "" : request.getUrl().toString();
                 if (isImageRequest(url, request.getRequestHeaders())) {
                     WebResourceResponse cached = productImageResponse(url);
-                    if (cached != null) {
-                        return cached;
-                    }
+                    if (cached != null) return cached;
                 }
             }
             return super.shouldInterceptRequest(view, request);
@@ -102,8 +104,6 @@ public class MainActivity extends Activity {
         @Override
         public void onPageFinished(WebView view, String url) {
             super.onPageFinished(view, url);
-            // Product cards are rendered dynamically. Force every product image to
-            // request eagerly so one online catalog load warms the persistent native cache.
             String script = "(function(){"
                     + "if(window.__risheImageWarmup)return;window.__risheImageWarmup=true;"
                     + "function warm(){document.querySelectorAll('.product-media img').forEach(function(i){"
@@ -116,13 +116,9 @@ public class MainActivity extends Activity {
     }
 
     private boolean isImageRequest(String url, Map<String, String> headers) {
-        if (url == null || !(url.startsWith("https://") || url.startsWith("http://"))) {
-            return false;
-        }
+        if (url == null || !(url.startsWith("https://") || url.startsWith("http://"))) return false;
         String accept = headers == null ? "" : headers.get("Accept");
-        if (accept != null && accept.toLowerCase(Locale.US).contains("image/")) {
-            return true;
-        }
+        if (accept != null && accept.toLowerCase(Locale.US).contains("image/")) return true;
         String lower = url.toLowerCase(Locale.US);
         int query = lower.indexOf('?');
         if (query >= 0) lower = lower.substring(0, query);
@@ -135,13 +131,10 @@ public class MainActivity extends Activity {
             String key = sha256(url);
             File data = new File(productImageDirectory, key + ".bin");
             File meta = new File(productImageDirectory, key + ".mime");
-
             if (data.isFile() && data.length() > 0) {
                 return imageResponse(data, readMime(meta, mimeFromUrl(url)));
             }
-            if (!hasNetwork()) {
-                return null;
-            }
+            if (!hasNetwork()) return null;
 
             File temp = new File(productImageDirectory, key + "." + Thread.currentThread().getId() + ".tmp");
             HttpURLConnection connection = null;
@@ -152,23 +145,20 @@ public class MainActivity extends Activity {
                 connection.setReadTimeout(12000);
                 connection.setRequestMethod("GET");
                 connection.setRequestProperty("Accept", "image/avif,image/webp,image/apng,image/svg+xml,image/*,*/*;q=0.8");
-                connection.setRequestProperty("User-Agent", "Event-Rishe-Android/2.4");
+                connection.setRequestProperty("User-Agent", "Event-Rishe-Android/2.5");
                 connection.setUseCaches(false);
-
                 int status = connection.getResponseCode();
                 if (status < 200 || status >= 300) return null;
-
                 long declaredLength = connection.getContentLengthLong();
                 if (declaredLength > MAX_IMAGE_BYTES) return null;
+
                 String mime = connection.getContentType();
                 if (mime != null) {
                     int semicolon = mime.indexOf(';');
                     if (semicolon >= 0) mime = mime.substring(0, semicolon);
                     mime = mime.trim().toLowerCase(Locale.US);
                 }
-                if (mime == null || !mime.startsWith("image/")) {
-                    mime = mimeFromUrl(url);
-                }
+                if (mime == null || !mime.startsWith("image/")) mime = mimeFromUrl(url);
 
                 long total = 0;
                 byte[] buffer = new byte[16 * 1024];
@@ -177,14 +167,11 @@ public class MainActivity extends Activity {
                     int read;
                     while ((read = input.read(buffer)) != -1) {
                         total += read;
-                        if (total > MAX_IMAGE_BYTES) {
-                            throw new IllegalStateException("Image too large");
-                        }
+                        if (total > MAX_IMAGE_BYTES) throw new IllegalStateException("Image too large");
                         output.write(buffer, 0, read);
                     }
                     output.flush();
                 }
-
                 if (total < 1) return null;
                 if (!data.exists() && !temp.renameTo(data)) return null;
                 if (temp.exists() && data.exists()) {
@@ -197,8 +184,7 @@ public class MainActivity extends Activity {
                 //noinspection ResultOfMethodCallIgnored
                 temp.delete();
                 return data.isFile() && data.length() > 0
-                        ? imageResponse(data, readMime(meta, mimeFromUrl(url)))
-                        : null;
+                        ? imageResponse(data, readMime(meta, mimeFromUrl(url))) : null;
             } finally {
                 if (connection != null) connection.disconnect();
             }
@@ -271,6 +257,39 @@ public class MainActivity extends Activity {
         }
 
         @JavascriptInterface
+        public void mirrorSale(String saleJson) {
+            try {
+                EventSyncWorker.mirrorSale(MainActivity.this, saleJson);
+            } catch (Exception ignored) {
+            }
+        }
+
+        @JavascriptInterface
+        public void retrySale(String clientUuid) {
+            EventSyncWorker.retrySale(MainActivity.this, clientUuid);
+        }
+
+        @JavascriptInterface
+        public void forgetSale(String clientUuid) {
+            EventSyncWorker.forgetSale(MainActivity.this, clientUuid);
+        }
+
+        @JavascriptInterface
+        public String backgroundResults() {
+            return EventSyncWorker.resultsJson(MainActivity.this);
+        }
+
+        @JavascriptInterface
+        public void acknowledgeBackgroundResults(String idsJson) {
+            EventSyncWorker.acknowledgeResults(MainActivity.this, idsJson);
+        }
+
+        @JavascriptInterface
+        public void scheduleBackgroundSync() {
+            if (EventSyncWorker.hasPending(MainActivity.this)) EventSyncWorker.schedule(MainActivity.this);
+        }
+
+        @JavascriptInterface
         public void login(String requestId, String username, String password) {
             new Thread(() -> {
                 try {
@@ -293,8 +312,8 @@ public class MainActivity extends Activity {
                     NetworkResponse validation = performRequest("GET", "/bootstrap", "", token);
                     if (validation.status < 200 || validation.status >= 300) {
                         preferences.edit().remove(TOKEN_KEY).commit();
-                        String fallback = "ورود تأیید شد، اما نشست فروش توسط سرور پذیرفته نشد.";
-                        callback(requestId, false, validation.status, normalizeError(validation.body, fallback));
+                        callback(requestId, false, validation.status,
+                                normalizeError(validation.body, "ورود تأیید شد، اما نشست فروش توسط سرور پذیرفته نشد."));
                         return;
                     }
 
@@ -302,6 +321,7 @@ public class MainActivity extends Activity {
                         callback(requestId, false, 500, jsonMessage("ذخیره نشست ورود روی گوشی انجام نشد."));
                         return;
                     }
+                    if (EventSyncWorker.hasPending(MainActivity.this)) EventSyncWorker.schedule(MainActivity.this);
 
                     JSONObject success = new JSONObject();
                     success.put("login", data);
@@ -325,7 +345,7 @@ public class MainActivity extends Activity {
                 try {
                     String safePath = path != null && path.startsWith("/") ? path : "/";
                     NetworkResponse response = performRequest(
-                            method == null ? "GET" : method.toUpperCase(),
+                            method == null ? "GET" : method.toUpperCase(Locale.US),
                             safePath,
                             body == null ? "" : body,
                             token
@@ -334,12 +354,8 @@ public class MainActivity extends Activity {
                     if (!ok && (response.status == 401 || response.status == 403)) {
                         preferences.edit().remove(TOKEN_KEY).commit();
                     }
-                    callback(
-                            requestId,
-                            ok,
-                            response.status,
-                            ok ? response.body : normalizeError(response.body, "ارتباط با سرور انجام نشد.")
-                    );
+                    callback(requestId, ok, response.status,
+                            ok ? response.body : normalizeError(response.body, "ارتباط با سرور انجام نشد."));
                 } catch (Exception error) {
                     callback(requestId, false, 0, jsonMessage(networkMessage(error)));
                 }
@@ -355,13 +371,12 @@ public class MainActivity extends Activity {
         connection.setRequestMethod(method);
         connection.setRequestProperty("Accept", "application/json");
         connection.setRequestProperty("Content-Type", "application/json; charset=utf-8");
-        connection.setRequestProperty("User-Agent", "Event-Rishe-Android/2.4");
+        connection.setRequestProperty("User-Agent", "Event-Rishe-Android/2.5");
         connection.setUseCaches(false);
         if (token != null && !token.isEmpty()) {
             connection.setRequestProperty("X-Rishe-Event-Token", token);
             connection.setRequestProperty("Authorization", "Bearer " + token);
         }
-
         if (!"GET".equals(method) && !"HEAD".equals(method)) {
             connection.setDoOutput(true);
             byte[] bytes = (body == null ? "" : body).getBytes(StandardCharsets.UTF_8);
@@ -370,17 +385,11 @@ public class MainActivity extends Activity {
                 output.write(bytes);
             }
         }
-
         int status = connection.getResponseCode();
-        InputStream input = status >= 200 && status < 400
-                ? connection.getInputStream()
-                : connection.getErrorStream();
+        InputStream input = status >= 200 && status < 400 ? connection.getInputStream() : connection.getErrorStream();
         String responseBody = readAll(input);
         connection.disconnect();
-        if (responseBody.trim().isEmpty()) {
-            responseBody = "{}";
-        }
-        return new NetworkResponse(status, responseBody);
+        return new NetworkResponse(status, responseBody.trim().isEmpty() ? "{}" : responseBody);
     }
 
     private String readAll(InputStream input) throws Exception {
@@ -388,9 +397,7 @@ public class MainActivity extends Activity {
         StringBuilder result = new StringBuilder();
         try (BufferedReader reader = new BufferedReader(new InputStreamReader(input, StandardCharsets.UTF_8))) {
             String line;
-            while ((line = reader.readLine()) != null) {
-                result.append(line);
-            }
+            while ((line = reader.readLine()) != null) result.append(line);
         }
         return result.toString();
     }
@@ -437,10 +444,17 @@ public class MainActivity extends Activity {
                 : "";
         String script = forceUi + "window.__nativeResult(" + safeId + "," + (ok ? "true" : "false") + "," + status + "," + safePayload + ");";
         runOnUiThread(() -> {
-            if (webView != null) {
-                webView.evaluateJavascript(script, null);
-            }
+            if (webView != null) webView.evaluateJavascript(script, null);
         });
+    }
+
+    @Override
+    protected void onResume() {
+        super.onResume();
+        if (EventSyncWorker.hasPending(this)) EventSyncWorker.schedule(this);
+        if (webView != null) {
+            webView.evaluateJavascript("if(window.__risheReconcileBackground){window.__risheReconcileBackground();}", null);
+        }
     }
 
     @Override
