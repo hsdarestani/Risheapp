@@ -15,9 +15,8 @@ import android.webkit.WebView;
 import android.webkit.WebViewClient;
 
 public class MainActivity extends Activity {
-    private static final String APP_URL = "https://rishe.smarbiz.sbs/rishe-event-app/";
-    private static final String FALLBACK_APP_URL = "https://rishe.smarbiz.sbs/?rishe_event_app=1";
-    private static final String TRUSTED_HOST = "rishe.smarbiz.sbs";
+    private static final String APP_URL = "https://rishe.store/rishe-event-app/";
+    private static final String FALLBACK_APP_URL = "https://rishe.store/?rishe_event_app=1";
 
     private WebView webView;
     private boolean triedFallback = false;
@@ -41,7 +40,7 @@ public class MainActivity extends Activity {
         settings.setAllowContentAccess(true);
         settings.setMediaPlaybackRequiresUserGesture(false);
         settings.setCacheMode(WebSettings.LOAD_DEFAULT);
-        settings.setUserAgentString(settings.getUserAgentString() + " RisheEventAndroid/1.1");
+        settings.setUserAgentString(settings.getUserAgentString() + " RisheEventAndroid/1.2");
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
             settings.setSafeBrowsingEnabled(true);
         }
@@ -71,8 +70,7 @@ public class MainActivity extends Activity {
 
                 Uri uri = Uri.parse(url == null ? "" : url);
                 if (isEventAppUri(uri)) {
-                    triedFallback = false;
-                    view.clearHistory();
+                    verifyAndLockEventScreen(view);
                     return;
                 }
 
@@ -98,8 +96,40 @@ public class MainActivity extends Activity {
             }
         });
 
-        // Never restore an old web page. Every app start is pinned to the event-sales screen.
+        // Never restore the old Rishe app. Every launch starts on the dedicated event POS.
         loadEventApp();
+    }
+
+    private void verifyAndLockEventScreen(WebView view) {
+        view.evaluateJavascript(
+                "document.getElementById('rishe-event-app') ? 'ok' : 'wrong'",
+                result -> {
+                    if ("\"ok\"".equals(result)) {
+                        triedFallback = false;
+                        injectKioskCss(view);
+                        view.clearHistory();
+                    } else if (!triedFallback) {
+                        triedFallback = true;
+                        view.loadUrl(FALLBACK_APP_URL);
+                    } else {
+                        showWrongEndpointPage();
+                    }
+                }
+        );
+    }
+
+    private void injectKioskCss(WebView view) {
+        String script = "(function(){"
+                + "var old=document.getElementById('rishe-event-apk-lock');if(old)old.remove();"
+                + "var s=document.createElement('style');s.id='rishe-event-apk-lock';"
+                + "s.textContent='.event-app__nav{display:none!important}'"
+                + "+'[data-screen=\\\"queue\\\"]{display:none!important}'"
+                + "+'.event-app{padding-bottom:0!important}';"
+                + "document.head.appendChild(s);"
+                + "var sale=document.querySelector('[data-screen=\\\"sale\\\"]');"
+                + "if(sale){sale.classList.add('is-active');sale.style.display='block';}"
+                + "})();";
+        view.evaluateJavascript(script, null);
     }
 
     private void loadEventApp() {
@@ -133,7 +163,8 @@ public class MainActivity extends Activity {
     private boolean isTrustedHttpUri(Uri uri) {
         String scheme = uri.getScheme() == null ? "" : uri.getScheme().toLowerCase();
         String host = uri.getHost() == null ? "" : uri.getHost().toLowerCase();
-        return (scheme.equals("http") || scheme.equals("https")) && host.equals(TRUSTED_HOST);
+        boolean trustedHost = host.equals("rishe.store") || host.equals("www.rishe.store");
+        return (scheme.equals("http") || scheme.equals("https")) && trustedHost;
     }
 
     private boolean isLoginUri(Uri uri) {
@@ -147,6 +178,18 @@ public class MainActivity extends Activity {
         String path = uri.getPath() == null ? "/" : uri.getPath();
         if (path.startsWith("/rishe-event-app/")) return true;
         return (path.equals("/") || path.isEmpty()) && "1".equals(uri.getQueryParameter("rishe_event_app"));
+    }
+
+    private void showWrongEndpointPage() {
+        String html = "<!doctype html><html lang='fa' dir='rtl'><head>"
+                + "<meta name='viewport' content='width=device-width,initial-scale=1'>"
+                + "<style>body{margin:0;min-height:100vh;display:grid;place-items:center;padding:24px;box-sizing:border-box;"
+                + "background:#f4f2e9;color:#173c2f;font-family:sans-serif;text-align:center}.c{max-width:430px;background:#fff;"
+                + "border:1px solid #d8d3c5;border-radius:24px;padding:30px}button{border:0;border-radius:14px;background:#173c2f;"
+                + "color:#fff;padding:13px 22px;font:inherit;font-weight:700}</style></head><body><div class='c'>"
+                + "<h1>ایونت ریشه</h1><p>صفحه فروش ایونت روی سایت پیدا نشد. افزونه ریشه را بررسی کنید.</p>"
+                + "<button onclick=\"location.href='" + APP_URL + "'\">تلاش دوباره</button></div></body></html>";
+        webView.loadDataWithBaseURL(APP_URL, html, "text/html", "UTF-8", null);
     }
 
     private void showFirstRunOfflinePage() {
