@@ -16,3 +16,4 @@ dependencyResolutionManagement {
 
 rootProject.name = "RisheAndroid"
 include(":app")
+include(":eventapp")
