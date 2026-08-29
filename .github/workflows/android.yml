@@ -1,4 +1,4 @@
-name: Build Rishe Android APK
+name: Build Rishe Android APKs
 
 on:
   workflow_dispatch:
@@ -44,7 +44,7 @@ jobs:
         with:
           gradle-version: "8.10.2"
 
-      - name: Build test APK
+      - name: Build test APKs
         run: gradle -p android --no-daemon assembleDebug
 
       - name: Restore release signing key
@@ -53,23 +53,40 @@ jobs:
           echo "$ANDROID_KEYSTORE_B64" | base64 --decode > "$RUNNER_TEMP/rishe-release.keystore"
           echo "ANDROID_KEYSTORE_PATH=$RUNNER_TEMP/rishe-release.keystore" >> "$GITHUB_ENV"
 
-      - name: Build Bazaar release APK
+      - name: Build signed release APKs
         if: env.ANDROID_KEYSTORE_B64 != ''
         run: gradle -p android --no-daemon assembleRelease
 
-      - name: Upload test APK
+      - name: Upload main Rishe test APK
         uses: actions/upload-artifact@v4
         with:
           name: rishe-android-test
-          path: android/app/build/outputs/apk/debug/app-debug.apk
+          path: android/app/build/outputs/apk/debug/*.apk
           if-no-files-found: error
           retention-days: 30
 
-      - name: Upload Bazaar release APK
+      - name: Upload Event Rishe test APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: event-rishe-android-test
+          path: android/eventapp/build/outputs/apk/debug/*.apk
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Upload main Rishe release APK
         if: env.ANDROID_KEYSTORE_B64 != ''
         uses: actions/upload-artifact@v4
         with:
           name: rishe-bazaar-release
-          path: android/app/build/outputs/apk/release/app-release.apk
+          path: android/app/build/outputs/apk/release/*.apk
+          if-no-files-found: error
+          retention-days: 90
+
+      - name: Upload Event Rishe release APK
+        if: env.ANDROID_KEYSTORE_B64 != ''
+        uses: actions/upload-artifact@v4
+        with:
+          name: event-rishe-release
+          path: android/eventapp/build/outputs/apk/release/*.apk
           if-no-files-found: error
           retention-days: 90
