@@ -50,7 +50,7 @@ public class MainActivity extends Activity {
         settings.setAllowContentAccess(false);
         settings.setMediaPlaybackRequiresUserGesture(false);
         settings.setCacheMode(WebSettings.LOAD_DEFAULT);
-        settings.setUserAgentString(settings.getUserAgentString() + " RisheEventAndroid/2.1");
+        settings.setUserAgentString(settings.getUserAgentString() + " RisheEventAndroid/2.2");
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
             settings.setSafeBrowsingEnabled(true);
         }
@@ -82,19 +82,36 @@ public class MainActivity extends Activity {
                     body.put("username", username == null ? "" : username);
                     body.put("password", password == null ? "" : password);
                     NetworkResponse response = performRequest("POST", "/device-login", body.toString(), "");
-                    if (response.status >= 200 && response.status < 300) {
-                        JSONObject data = new JSONObject(response.body);
-                        String token = data.optString("device_token", "");
-                        if (token.isEmpty()) {
-                            callback(requestId, false, 500, jsonMessage("توکن ورود از سرور دریافت نشد."));
-                            return;
-                        }
-                        preferences.edit().putString(TOKEN_KEY, token).apply();
-                        callback(requestId, true, response.status, response.body);
+                    if (response.status < 200 || response.status >= 300) {
+                        callback(requestId, false, response.status, normalizeError(response.body, "ورود انجام نشد."));
                         return;
                     }
-                    callback(requestId, false, response.status, normalizeError(response.body, "ورود انجام نشد."));
+
+                    JSONObject data = new JSONObject(response.body);
+                    String token = data.optString("device_token", "");
+                    if (token.isEmpty()) {
+                        callback(requestId, false, 500, jsonMessage("توکن ورود از سرور دریافت نشد."));
+                        return;
+                    }
+
+                    // Do not consider login successful until the exact same token is
+                    // accepted by the protected seller API. This avoids the UI briefly
+                    // hiding the login screen and immediately returning to it.
+                    NetworkResponse validation = performRequest("GET", "/bootstrap", "", token);
+                    if (validation.status < 200 || validation.status >= 300) {
+                        preferences.edit().remove(TOKEN_KEY).apply();
+                        String fallback = "ورود تأیید شد، اما نشست فروش توسط سرور پذیرفته نشد.";
+                        callback(requestId, false, validation.status, normalizeError(validation.body, fallback));
+                        return;
+                    }
+
+                    preferences.edit().putString(TOKEN_KEY, token).commit();
+                    JSONObject success = new JSONObject();
+                    success.put("login", data);
+                    success.put("bootstrap", new JSONObject(validation.body));
+                    callback(requestId, true, response.status, success.toString());
                 } catch (Exception error) {
+                    preferences.edit().remove(TOKEN_KEY).apply();
                     callback(requestId, false, 0, jsonMessage(networkMessage(error)));
                 }
             }).start();
@@ -141,10 +158,11 @@ public class MainActivity extends Activity {
         connection.setRequestMethod(method);
         connection.setRequestProperty("Accept", "application/json");
         connection.setRequestProperty("Content-Type", "application/json; charset=utf-8");
-        connection.setRequestProperty("User-Agent", "Event-Rishe-Android/2.1");
+        connection.setRequestProperty("User-Agent", "Event-Rishe-Android/2.2");
         connection.setUseCaches(false);
         if (token != null && !token.isEmpty()) {
             connection.setRequestProperty("X-Rishe-Event-Token", token);
+            connection.setRequestProperty("Authorization", "Bearer " + token);
         }
 
         if (!"GET".equals(method) && !"HEAD".equals(method)) {
