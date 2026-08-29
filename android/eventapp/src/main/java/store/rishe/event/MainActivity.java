@@ -16,9 +16,11 @@ import android.webkit.WebViewClient;
 
 public class MainActivity extends Activity {
     private static final String APP_URL = "https://rishe.smarbiz.sbs/rishe-event-app/";
+    private static final String FALLBACK_APP_URL = "https://rishe.smarbiz.sbs/?rishe_event_app=1";
     private static final String TRUSTED_HOST = "rishe.smarbiz.sbs";
 
     private WebView webView;
+    private boolean triedFallback = false;
 
     @SuppressLint("SetJavaScriptEnabled")
     @Override
@@ -39,7 +41,7 @@ public class MainActivity extends Activity {
         settings.setAllowContentAccess(true);
         settings.setMediaPlaybackRequiresUserGesture(false);
         settings.setCacheMode(WebSettings.LOAD_DEFAULT);
-        settings.setUserAgentString(settings.getUserAgentString() + " RisheEventAndroid/1.0");
+        settings.setUserAgentString(settings.getUserAgentString() + " RisheEventAndroid/1.1");
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
             settings.setSafeBrowsingEnabled(true);
         }
@@ -66,37 +68,56 @@ public class MainActivity extends Activity {
             public void onPageFinished(WebView view, String url) {
                 super.onPageFinished(view, url);
                 CookieManager.getInstance().flush();
+
+                Uri uri = Uri.parse(url == null ? "" : url);
+                if (isEventAppUri(uri)) {
+                    triedFallback = false;
+                    view.clearHistory();
+                    return;
+                }
+
+                if (isLoginUri(uri)) {
+                    return;
+                }
+
+                if (isTrustedHttpUri(uri)) {
+                    loadEventApp();
+                }
             }
 
             @Override
             public void onReceivedError(WebView view, WebResourceRequest request, WebResourceError error) {
                 if (request.isForMainFrame()) {
-                    showFirstRunOfflinePage();
+                    if (!triedFallback) {
+                        triedFallback = true;
+                        webView.loadUrl(FALLBACK_APP_URL);
+                    } else {
+                        showFirstRunOfflinePage();
+                    }
                 }
             }
         });
 
-        if (savedInstanceState == null) {
-            webView.loadUrl(APP_URL);
-        } else {
-            webView.restoreState(savedInstanceState);
-        }
+        // Never restore an old web page. Every app start is pinned to the event-sales screen.
+        loadEventApp();
+    }
+
+    private void loadEventApp() {
+        if (webView == null) return;
+        webView.loadUrl(triedFallback ? FALLBACK_APP_URL : APP_URL);
     }
 
     private boolean handleNavigation(Uri uri) {
-        String scheme = uri.getScheme() == null ? "" : uri.getScheme().toLowerCase();
-        String host = uri.getHost() == null ? "" : uri.getHost().toLowerCase();
-        String path = uri.getPath() == null ? "/" : uri.getPath();
+        if (isEventAppUri(uri) || isLoginUri(uri)) {
+            return false;
+        }
 
-        if ((scheme.equals("http") || scheme.equals("https")) && host.equals(TRUSTED_HOST)) {
-            if (path.startsWith("/rishe-event-app/") || path.equals("/wp-login.php")) {
-                return false;
-            }
-
-            webView.loadUrl(APP_URL);
+        if (isTrustedHttpUri(uri)) {
+            loadEventApp();
             return true;
         }
 
+        String scheme = uri.getScheme() == null ? "" : uri.getScheme().toLowerCase();
         if (scheme.equals("about") || scheme.equals("data")) {
             return false;
         }
@@ -107,6 +128,25 @@ public class MainActivity extends Activity {
             // Unsupported external links are ignored; the POS remains on its own screen.
         }
         return true;
+    }
+
+    private boolean isTrustedHttpUri(Uri uri) {
+        String scheme = uri.getScheme() == null ? "" : uri.getScheme().toLowerCase();
+        String host = uri.getHost() == null ? "" : uri.getHost().toLowerCase();
+        return (scheme.equals("http") || scheme.equals("https")) && host.equals(TRUSTED_HOST);
+    }
+
+    private boolean isLoginUri(Uri uri) {
+        if (!isTrustedHttpUri(uri)) return false;
+        String path = uri.getPath() == null ? "/" : uri.getPath();
+        return path.equals("/wp-login.php");
+    }
+
+    private boolean isEventAppUri(Uri uri) {
+        if (!isTrustedHttpUri(uri)) return false;
+        String path = uri.getPath() == null ? "/" : uri.getPath();
+        if (path.startsWith("/rishe-event-app/")) return true;
+        return (path.equals("/") || path.isEmpty()) && "1".equals(uri.getQueryParameter("rishe_event_app"));
     }
 
     private void showFirstRunOfflinePage() {
@@ -124,7 +164,6 @@ public class MainActivity extends Activity {
 
     @Override
     protected void onSaveInstanceState(Bundle outState) {
-        webView.saveState(outState);
         super.onSaveInstanceState(outState);
     }
 
