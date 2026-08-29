@@ -97,6 +97,53 @@ app.use((req, res, next) => {
 app.get('/api/health', (_req, res) => res.json({ ok: true, service: 'rishe-app', time: new Date().toISOString() }))
 app.get('/api/products', async (_req, res) => res.json({ products: await fetchProducts(), source: productCache.products === fallbackProducts ? 'fallback' : 'woocommerce' }))
 
+const eventRelayRoutes = [
+  { method: 'POST', pattern: /^\/device-login$/ },
+  { method: 'GET', pattern: /^\/bootstrap$/ },
+  { method: 'GET', pattern: /^\/events\/\d+\/catalog$/ },
+  { method: 'POST', pattern: /^\/sync$/ },
+]
+
+function isAllowedEventRelay(method, suffix) {
+  return eventRelayRoutes.some(route => route.method === method && route.pattern.test(suffix))
+}
+
+app.all('/api/event-rishe/*', async (req, res) => {
+  const suffix = `/${String(req.params[0] || '').replace(/^\/+/, '')}`
+  const method = req.method.toUpperCase()
+  if (!isAllowedEventRelay(method, suffix)) return res.status(404).json({ message: 'مسیر درخواست معتبر نیست.' })
+
+  const headers = {
+    Accept: 'application/json',
+    'Content-Type': 'application/json; charset=utf-8',
+    'User-Agent': 'Event-Rishe-Relay/1.0',
+  }
+  const deviceToken = cleanText(req.get('x-rishe-event-token') || '', 200)
+  if (deviceToken) headers['X-Rishe-Event-Token'] = deviceToken
+
+  try {
+    const upstream = await fetch(`${wooBase}/wp-json/rishe/v1/event-sales${suffix}`, {
+      method,
+      headers,
+      body: method === 'GET' || method === 'HEAD' ? undefined : JSON.stringify(req.body || {}),
+      signal: AbortSignal.timeout(18000),
+      redirect: 'follow',
+    })
+    const text = await upstream.text()
+    res.status(upstream.status)
+    res.type('application/json')
+    return res.send(text || '{}')
+  } catch (error) {
+    console.error('[event-rishe-relay]', method, suffix, error?.message || error)
+    const timeout = String(error?.name || '').toLowerCase().includes('timeout') || String(error?.message || '').toLowerCase().includes('timeout')
+    return res.status(502).json({
+      message: timeout
+        ? 'سرور فروشگاه به‌موقع پاسخ نداد. دوباره تلاش کنید.'
+        : 'ارتباط واسط با سرور فروشگاه برقرار نشد.',
+    })
+  }
+})
+
 app.post('/api/returns', async (req, res) => {
   const body = req.body || {}
   const required = ['name', 'mobile', 'order', 'product', 'details']
